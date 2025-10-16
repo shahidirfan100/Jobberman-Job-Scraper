@@ -341,7 +341,7 @@ const crawler = new CheerioCrawler({
                 return;
             }
 
-            let title, company, location, date_posted, job_type, salary_range, description_html, description_text;
+            let title, company, location, date_posted, job_type, salary_range, category, description_html, description_text;
 
             try {
                 // Try JSON-LD first
@@ -371,39 +371,90 @@ const crawler = new CheerioCrawler({
                     description_text = cleanText(cheerioLoad(jsonLd.description || '').text());
                     description_html = sanitizeDescription($, cheerioLoad(jsonLd.description || ''), request.url);
                 } else {
-                    // HTML selectors for Jobberman - based on actual page structure
+                    // HTML selectors for Jobberman - based on actual page structure with CSS classes
                     crawlerLog.debug('Extracting data from HTML selectors.');
                     
-                    // Title: h1 at top of page
-                    title = cleanText($('h1').first().text());
+                    // Title: Using the specific title class
+                    title = cleanText($('.mt-6.mb-3.font-medium.text-lg, h1').first().text());
                     
                     // Company: h2 right after h1
                     company = cleanText($('h2').first().text());
                     
-                    // Location, Job Type, Salary: Extract from page metadata/breadcrumbs
-                    // These appear as links or text in the job header area
-                    const metadataLinks = $('a[href*="/jobs/"]').toArray();
+                    // Extract badges with class: text-sm font-normal px-3 rounded bg-brand-secondary-50 mr-2 mb-3 inline-block text-gray-700
+                    // These badges contain: location, job type, and category
+                    const badges = $('.text-sm.font-normal.px-3.rounded.bg-brand-secondary-50, .text-sm.font-normal.px-3.rounded, a[class*="text-sm"][class*="px-3"][class*="rounded"]').toArray();
                     
-                    // Location extraction - look for city/state patterns
-                    metadataLinks.forEach((link) => {
-                        const href = $(link).attr('href') || '';
-                        const text = cleanText($(link).text());
+                    const locations = [];
+                    const jobTypes = [];
+                    const categories = [];
+                    
+                    // Process each badge to categorize them
+                    badges.forEach((badge) => {
+                        const $badge = $(badge);
+                        const text = cleanText($badge.text());
+                        const href = $badge.attr('href') || '';
                         
-                        // Location links contain city names
-                        if (!location && href.includes('/jobs/') && !href.includes('/jobs/full-time') && 
-                            !href.includes('/jobs/part-time') && !href.includes('industry=') && 
-                            text && text.length > 2 && /^[A-Za-z\s&-]+$/.test(text)) {
-                            location = text;
-                        }
+                        if (!text || text.length < 2) return;
                         
-                        // Job type extraction
-                        if (!job_type && (href.includes('full-time') || href.includes('part-time') || 
-                            href.includes('contract') || href.includes('internship'))) {
-                            job_type = text;
+                        // Categorize based on href pattern or known values
+                        if (href.includes('/jobs/') && !href.includes('industry=') && !href.includes('full-time') && !href.includes('part-time')) {
+                            // Location badges link to location-filtered jobs
+                            const locationMatch = href.match(/\/jobs\/[^\/]+\/([^\/\?]+)/);
+                            if (locationMatch || /^[A-Za-z\s&-]+$/.test(text)) {
+                                locations.push(text);
+                            }
+                        } else if (text.toLowerCase().includes('time') || text.toLowerCase().includes('contract') || 
+                                   text.toLowerCase().includes('internship') || text.toLowerCase().includes('temporary') ||
+                                   href.includes('full-time') || href.includes('part-time')) {
+                            // Job type badges
+                            jobTypes.push(text);
+                        } else if (href.includes('industry=') || href.match(/\/jobs\/([^\/\?]+)/)) {
+                            // Category/Industry badges
+                            categories.push(text);
+                        } else {
+                            // Fallback: check text patterns
+                            const lowerText = text.toLowerCase();
+                            if (lowerText.includes('full') || lowerText.includes('part') || lowerText.includes('contract') || lowerText.includes('internship')) {
+                                jobTypes.push(text);
+                            } else if (text.includes('&') || text.includes(',')) {
+                                // Location often has '&' like "Lagos & Oyo State"
+                                locations.push(text);
+                            } else {
+                                // Default to category
+                                categories.push(text);
+                            }
                         }
                     });
                     
-                    // Salary extraction - look for NGN or salary pattern
+                    // Also check direct link selectors for location and job type
+                    $('a[href*="/jobs/"]').each((_, link) => {
+                        const $link = $(link);
+                        const href = $link.attr('href') || '';
+                        const text = cleanText($link.text());
+                        
+                        if (!text || badges.includes(link)) return; // Skip if already processed
+                        
+                        // Location links
+                        if (href.match(/\/jobs\/[^\/]+\/([^\/\?]+)/) && !href.includes('full-time') && !href.includes('part-time')) {
+                            if (!locations.includes(text) && text.length > 2) {
+                                locations.push(text);
+                            }
+                        }
+                        
+                        // Job type links
+                        if (href.includes('full-time') || href.includes('part-time') || href.includes('contract')) {
+                            if (!jobTypes.includes(text)) {
+                                jobTypes.push(text);
+                            }
+                        }
+                    });
+                    
+                    // Set final values (join if multiple found)
+                    location = locations.length > 0 ? locations.join(', ') : null;
+                    job_type = jobTypes.length > 0 ? jobTypes.join(', ') : null;
+                    category = categories.length > 0 ? categories.join(', ') : null;
+                    
+                    // Salary extraction - look for NGN or salary pattern in page text
                     const pageText = $('body').text();
                     const salaryMatch = pageText.match(/NGN\s*([\d,]+(?:\s*-\s*[\d,]+)?)/i);
                     if (salaryMatch) {
@@ -481,6 +532,7 @@ const crawler = new CheerioCrawler({
                     company: company || null,
                     location: location || null,
                     job_type: job_type || null,
+                    category: category || null,
                     salary_range: salary_range || null,
                     date_posted: date_posted || null,
                     description_html: description_html || null,
