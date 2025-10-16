@@ -94,53 +94,58 @@ const toAbs = (href, base = 'https://www.jobberman.com') => {
 
 const collectJobLinks = ($) => {
     const links = new Set();
-    // Updated selectors to target job cards on Jobberman
-    $('.job-list li a, .job-card a, .search-result-item a, .job-item a').each((_, a) => {
+    
+    // Primary selector: links containing '/listings/'
+    $('a[href*="/listings/"]').each((_, a) => {
         const href = $(a).attr('href');
-        if (href && (href.includes('/listings/') || href.includes('/jobs/'))) {
+        if (href && href.includes('/listings/')) {
             const abs = toAbs(href);
-            if (abs) links.add(abs);
+            if (abs && !abs.includes('#') && !abs.includes('utm_')) {
+                // Clean URL - remove query parameters
+                const cleanUrl = abs.split('?')[0];
+                links.add(cleanUrl);
+            }
         }
     });
     
-    // Additional fallback selectors for job links
-    $('a[href*="/listings/"]').each((_, a) => {
-        const href = $(a).attr('href');
-        if (href) {
-            const abs = toAbs(href);
-            if (abs) links.add(abs);
-        }
-    });
+    // Fallback: look for job card containers
+    if (links.size === 0) {
+        $('.job-list li a, .job-card a, .search-result-item a, .job-item a').each((_, a) => {
+            const href = $(a).attr('href');
+            if (href) {
+                const abs = toAbs(href);
+                if (abs) {
+                    const cleanUrl = abs.split('?')[0];
+                    links.add(cleanUrl);
+                }
+            }
+        });
+    }
     
     return [...links];
 };
 
 const findNextUrl = ($, currentUrl) => {
-    // Updated pagination selectors for Jobberman
-    const nextLink = $('a[rel="next"]').attr('href') || 
-                     $('.pagination a:contains("Next")').attr('href') ||
-                     $('.pagination .next a').attr('href') ||
-                     $('a:contains("Next")').attr('href');
+    // Primary: Look for "next page" link
+    const nextLink = $('a[href*="?page="]:contains("next")').attr('href') || 
+                     $('a[rel="next"]').attr('href') || 
+                     $('a:contains("Go to next page")').attr('href');
     
     if (nextLink) return toAbs(nextLink);
 
-    // Fallback: find current page and get next sibling
-    const activePage = $('.pagination .active, .pagination .current, .pagination [aria-current="page"]').first();
-    if (activePage.length) {
-        const next = activePage.next().find('a').attr('href') || 
-                     activePage.next().attr('href');
-        if (next) return toAbs(next);
-    }
-    
-    // Additional fallback for numeric pagination
-    const currentPageMatch = currentUrl.match(/page=(\d+)/);
+    // Fallback: Extract current page number and build next URL
+    const currentPageMatch = currentUrl.match(/[?&]page=(\d+)/);
     if (currentPageMatch) {
         const currentPage = parseInt(currentPageMatch[1]);
-        const nextPageUrl = currentUrl.replace(/page=\d+/, `page=${currentPage + 1}`);
+        const nextPageUrl = currentUrl.replace(/([?&])page=\d+/, `$1page=${currentPage + 1}`);
         return nextPageUrl;
+    } else if (currentUrl.includes('?')) {
+        // Add page parameter
+        return `${currentUrl}&page=2`;
+    } else {
+        // First pagination
+        return `${currentUrl}?page=2`;
     }
-    
-    return null;
 };
 
 const findBestDescriptionContainer = ($) => {
@@ -171,35 +176,49 @@ const sanitizeDescription = ($, el, baseUrl) => {
     if (!el || !el.length) return '';
     const clone = el.clone();
     
-    clone.find('script, style, noscript, svg, button, form, header, footer, nav, aside').remove();
-    clone.find('[class*="social"], [class*="share"], [class*="apply-now-button"]').remove();
-
+    // Remove unwanted elements
+    clone.find('script, style, noscript, svg, button, form, header, footer, nav, aside, iframe').remove();
+    clone.find('[class*="social"], [class*="share"], [class*="apply"], [class*="login"]').remove();
+    clone.find('[class*="banner"], [class*="ad-"], [class*="advertisement"]').remove();
+    clone.find('[id*="ad-"], [id*="banner"]').remove();
+    
+    // Remove inline styles and clean attributes
     clone.find('*').each((_, node) => {
         const $node = $(node);
         const attribs = Object.keys(node.attribs || {});
         
         if (node.tagName === 'a') {
             const href = $node.attr('href');
+            // Remove all attributes
             attribs.forEach(attr => $node.removeAttr(attr));
+            // Re-add cleaned href
             if (href) {
                 const abs = toAbs(href, baseUrl);
                 if (abs) $node.attr('href', abs);
             }
         } else {
+            // For all other elements, remove all attributes (including class, style, id, etc.)
             attribs.forEach(attr => $node.removeAttr(attr));
         }
     });
 
-    // Remove empty elements
-    for (let i = 0; i < 3; i++) {
-        const empties = clone.find('*').filter((_, n) => $(n).text().trim() === '' && $(n).children().length === 0);
+    // Remove empty elements (multiple passes to handle nested empty elements)
+    for (let i = 0; i < 5; i++) {
+        const empties = clone.find('*').filter((_, n) => {
+            const $n = $(n);
+            const text = $n.text().trim();
+            const hasChildren = $n.children().length > 0;
+            const isBreakOrImg = n.tagName === 'br' || n.tagName === 'img' || n.tagName === 'hr';
+            return !text && !hasChildren && !isBreakOrImg;
+        });
         if (empties.length === 0) break;
         empties.remove();
     }
 
     const html = clone.html() || '';
     clone.remove();
-    return html.replace(/\s+/g, ' ').trim();
+    // Clean up excessive whitespace but preserve line breaks
+    return html.replace(/\s+/g, ' ').replace(/>\s+</g, '><').trim();
 };
 
 const normalizeCookieHeader = ({ cookies, cookiesJson }) => {
@@ -322,7 +341,7 @@ const crawler = new CheerioCrawler({
                 return;
             }
 
-            let title, company, location, date_posted, description_html, description_text;
+            let title, company, location, date_posted, job_type, salary_range, description_html, description_text;
 
             try {
                 // Try JSON-LD first
@@ -334,33 +353,121 @@ const crawler = new CheerioCrawler({
                     title = jsonLd.title;
                     company = jsonLd.hiringOrganization?.name;
                     date_posted = jsonLd.datePosted;
+                    job_type = jsonLd.employmentType;
                     const { addressLocality, addressRegion } = jsonLd.jobLocation?.address || {};
                     location = [addressLocality, addressRegion].filter(Boolean).join(', ');
+                    
+                    // Extract salary from JSON-LD
+                    if (jsonLd.baseSalary) {
+                        const salaryValue = jsonLd.baseSalary.value || {};
+                        if (salaryValue.minValue || salaryValue.maxValue) {
+                            const currency = jsonLd.baseSalary.currency || 'NGN';
+                            const min = salaryValue.minValue ? `${currency} ${salaryValue.minValue.toLocaleString()}` : '';
+                            const max = salaryValue.maxValue ? `${currency} ${salaryValue.maxValue.toLocaleString()}` : '';
+                            salary_range = [min, max].filter(Boolean).join(' - ');
+                        }
+                    }
+                    
                     description_text = cleanText(cheerioLoad(jsonLd.description || '').text());
                     description_html = sanitizeDescription($, cheerioLoad(jsonLd.description || ''), request.url);
                 } else {
-                    // Updated HTML selectors for Jobberman
+                    // HTML selectors for Jobberman - based on actual page structure
                     crawlerLog.debug('Extracting data from HTML selectors.');
-                    title = cleanText($('h1[itemprop="title"]').first().text() || 
-                                      $('h1.job-title').first().text() || 
-                                      $('h1').first().text());
                     
-                    company = cleanText($('div[itemprop="hiringOrganization"] a').first().text() || 
-                                        $('.job-header__company a').first().text() || 
-                                        $('.company-name a').first().text() || 
-                                        $('[data-job-company]').first().text());
+                    // Title: h1 at top of page
+                    title = cleanText($('h1').first().text());
                     
-                    location = cleanText($('span[itemprop="jobLocation"]').first().text() || 
-                                         $('.job-location').first().text() || 
-                                         $('.location').first().text());
+                    // Company: h2 right after h1
+                    company = cleanText($('h2').first().text());
                     
-                    date_posted = cleanText($('time[itemprop="datePosted"]').attr('datetime') || 
-                                            $('.job-post-date').first().text() || 
-                                            $('.posted-date').first().text());
+                    // Location, Job Type, Salary: Extract from page metadata/breadcrumbs
+                    // These appear as links or text in the job header area
+                    const metadataLinks = $('a[href*="/jobs/"]').toArray();
                     
-                    const container = findBestDescriptionContainer($);
-                    description_html = sanitizeDescription($, container, request.url);
-                    description_text = cleanText(container.text());
+                    // Location extraction - look for city/state patterns
+                    metadataLinks.forEach((link) => {
+                        const href = $(link).attr('href') || '';
+                        const text = cleanText($(link).text());
+                        
+                        // Location links contain city names
+                        if (!location && href.includes('/jobs/') && !href.includes('/jobs/full-time') && 
+                            !href.includes('/jobs/part-time') && !href.includes('industry=') && 
+                            text && text.length > 2 && /^[A-Za-z\s&-]+$/.test(text)) {
+                            location = text;
+                        }
+                        
+                        // Job type extraction
+                        if (!job_type && (href.includes('full-time') || href.includes('part-time') || 
+                            href.includes('contract') || href.includes('internship'))) {
+                            job_type = text;
+                        }
+                    });
+                    
+                    // Salary extraction - look for NGN or salary pattern
+                    const pageText = $('body').text();
+                    const salaryMatch = pageText.match(/NGN\s*([\d,]+(?:\s*-\s*[\d,]+)?)/i);
+                    if (salaryMatch) {
+                        salary_range = cleanText(salaryMatch[0]);
+                    }
+                    
+                    // Date posted - look for "New", "Today", "Yesterday", "X days ago", etc.
+                    const datePatterns = ['New', 'Today', 'Yesterday'];
+                    const bodyText = $('body').text();
+                    for (const pattern of datePatterns) {
+                        if (bodyText.includes(pattern)) {
+                            date_posted = pattern;
+                            break;
+                        }
+                    }
+                    if (!date_posted) {
+                        const daysAgoMatch = bodyText.match(/(\d+)\s+days?\s+ago/i);
+                        if (daysAgoMatch) {
+                            date_posted = daysAgoMatch[0];
+                        }
+                    }
+                    
+                    // Description extraction - find Job Summary and Job Description sections
+                    const descriptionSections = [];
+                    
+                    // Look for Job Summary section
+                    $('h3, h2, h4').each((_, heading) => {
+                        const headingText = $(heading).text().trim();
+                        if (headingText.match(/job\s+summary/i)) {
+                            // Get text until next heading
+                            let nextElement = $(heading).next();
+                            while (nextElement.length && !nextElement.is('h1, h2, h3, h4, h5, h6')) {
+                                if (nextElement.text().trim()) {
+                                    descriptionSections.push(nextElement);
+                                }
+                                nextElement = nextElement.next();
+                            }
+                        }
+                        if (headingText.match(/job\s+description|requirements/i)) {
+                            // Get text until next heading
+                            let nextElement = $(heading).next();
+                            while (nextElement.length && !nextElement.is('h1, h2, h3, h4, h5, h6')) {
+                                if (nextElement.text().trim()) {
+                                    descriptionSections.push(nextElement);
+                                }
+                                nextElement = nextElement.next();
+                            }
+                        }
+                    });
+                    
+                    // Build description HTML and text
+                    if (descriptionSections.length > 0) {
+                        const descContainer = $('<div></div>');
+                        descriptionSections.forEach(el => {
+                            descContainer.append($(el).clone());
+                        });
+                        description_html = sanitizeDescription($, descContainer, request.url);
+                        description_text = cleanText(descContainer.text());
+                    } else {
+                        // Fallback: use the best description container
+                        const container = findBestDescriptionContainer($);
+                        description_html = sanitizeDescription($, container, request.url);
+                        description_text = cleanText(container.text());
+                    }
                 }
 
                 if (!title) {
@@ -373,6 +480,8 @@ const crawler = new CheerioCrawler({
                     title,
                     company: company || null,
                     location: location || null,
+                    job_type: job_type || null,
+                    salary_range: salary_range || null,
                     date_posted: date_posted || null,
                     description_html: description_html || null,
                     description_text: description_text || null,
