@@ -10,21 +10,6 @@
       "description": "Start scraping from a specific Jobberman.com search URL. If provided, this will be used instead of Keyword/Location.",
       "editor": "textfield"
     },
-    "url": {
-      "title": "URL",
-      "type": "string",
-      "description": "Alternative URL field for starting the scrape.",
-      "editor": "textfield"
-    },
-    "startUrls": {
-      "title": "Start URLs",
-      "type": "array",
-      "description": "Array of URLs to start scraping from.",
-      "editor": "select",
-      "items": {
-        "type": "string"
-      }
-    },
     "keyword": {
       "title": "Keyword (if not using Start URL)",
       "type": "string",
