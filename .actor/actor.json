@@ -1,11 +1,11 @@
 {
   "actorSpecification": 1,
-    "name": "jobberman-job-scraper",
-    "title": "Jobberman Job Scraper",
+  "name": "jobberman-job-scraper",
+  "title": "Jobberman Job Scraper",
   "version": "1.0.0",
   "buildTag": "latest",
   "dockerfile": "./Dockerfile",
   "readme": "../README.md",
   "input": "./input_schema.json",
-  "nodeJsVersion": "22"
+  "nodeJsVersion": "18"
 }

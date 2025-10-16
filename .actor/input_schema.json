@@ -10,6 +10,28 @@
       "description": "Start scraping from a specific Jobberman.com search URL. If provided, this will be used instead of Keyword/Location.",
       "editor": "textfield"
     },
+    "url": {
+      "title": "URL",
+      "type": "string",
+      "description": "Alternative URL field for starting the scrape.",
+      "editor": "textfield"
+    },
+    "startUrls": {
+      "title": "Start URLs",
+      "type": "array",
+      "description": "Array of URLs to start scraping from.",
+      "editor": "requestlist",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "title": "URL",
+            "type": "string",
+            "description": "A Jobberman.com URL to scrape."
+          }
+        }
+      }
+    },
     "keyword": {
       "title": "Keyword (if not using Start URL)",
       "type": "string",
@@ -79,10 +101,10 @@
     "cookiesJson": {
       "title": "Custom cookies (JSON)",
       "type": "string",
-      "description": "Optional JSON-formatted cookies. Accepts an array (e.g., [{"name":"a","value":"1"}]) or an object map (e.g., {"a":"1"}).",
+      "description": "Optional JSON-formatted cookies. Accepts an array (e.g., [{\"name\":\"a\",\"value\":\"1\"}]) or an object map (e.g., {\"a\":\"1\"}).",
       "editor": "textarea"
     }
   },
   "required": [],
-  "additionalProperties": false
+  "additionalProperties": true
 }

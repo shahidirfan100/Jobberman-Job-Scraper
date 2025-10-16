@@ -1,6 +1,8 @@
 {
   "keyword": "software engineer",
   "location": "Lagos",
+  "posted_date": "30d",
   "results_wanted": 10,
-  "max_pages": 3
+  "max_pages": 3,
+  "collectDetails": true
 }
