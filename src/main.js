@@ -94,36 +94,64 @@ const toAbs = (href, base = 'https://www.jobberman.com') => {
 
 const collectJobLinks = ($) => {
     const links = new Set();
-    // More specific selector to target job cards
-    $('.job-card a, .job-listing a, article a').each((_, a) => {
+    // Updated selectors to target job cards on Jobberman
+    $('.job-list li a, .job-card a, .search-result-item a, .job-item a').each((_, a) => {
         const href = $(a).attr('href');
-        if (href && href.includes('/listings/')) {
+        if (href && (href.includes('/listings/') || href.includes('/jobs/'))) {
             const abs = toAbs(href);
             if (abs) links.add(abs);
         }
     });
+    
+    // Additional fallback selectors for job links
+    $('a[href*="/listings/"]').each((_, a) => {
+        const href = $(a).attr('href');
+        if (href) {
+            const abs = toAbs(href);
+            if (abs) links.add(abs);
+        }
+    });
+    
     return [...links];
 };
 
 const findNextUrl = ($, currentUrl) => {
-    const nextLink = $('a[rel="next"]').attr('href');
+    // Updated pagination selectors for Jobberman
+    const nextLink = $('a[rel="next"]').attr('href') || 
+                     $('.pagination a:contains("Next")').attr('href') ||
+                     $('.pagination .next a').attr('href') ||
+                     $('a:contains("Next")').attr('href');
+    
     if (nextLink) return toAbs(nextLink);
 
     // Fallback: find current page and get next sibling
-    const activePage = $('.pagination .active, .pagination .current').first();
+    const activePage = $('.pagination .active, .pagination .current, .pagination [aria-current="page"]').first();
     if (activePage.length) {
-        const next = activePage.next().find('a').attr('href');
+        const next = activePage.next().find('a').attr('href') || 
+                     activePage.next().attr('href');
         if (next) return toAbs(next);
     }
+    
+    // Additional fallback for numeric pagination
+    const currentPageMatch = currentUrl.match(/page=(\d+)/);
+    if (currentPageMatch) {
+        const currentPage = parseInt(currentPageMatch[1]);
+        const nextPageUrl = currentUrl.replace(/page=\d+/, `page=${currentPage + 1}`);
+        return nextPageUrl;
+    }
+    
     return null;
 };
 
 const findBestDescriptionContainer = ($) => {
     const selectors = [
-        '.job-details__main', // Primary container on Jobberman
+        '.job-description', // Primary container on Jobberman
+        '.job-details__main',
         '[class*="job-description"]',
         '#job-description',
         'article.job-details',
+        '.job-summary',
+        '.job-content'
     ];
     for (const sel of selectors) {
         const el = $(sel).first();
@@ -134,9 +162,8 @@ const findBestDescriptionContainer = ($) => {
 
 const cleanText = (text) => {
     return String(text || '')
-        .replace(/[
-	]+/g, ' ')
-        .replace(/[^\u0020-\u007E\u00A0-\u024F\u1E00-\u1EFF]/g, '')
+        .replace(/[\\r\\n\\t]+/g, ' ')
+        .replace(/[^\\u0020-\\u007E\\u00A0-\\u024F\\u1E00-\\u1EFF]/g, '')
         .trim();
 };
 
@@ -312,12 +339,24 @@ const crawler = new CheerioCrawler({
                     description_text = cleanText(cheerioLoad(jsonLd.description || '').text());
                     description_html = sanitizeDescription($, cheerioLoad(jsonLd.description || ''), request.url);
                 } else {
-                    // Fallback to HTML selectors
+                    // Updated HTML selectors for Jobberman
                     crawlerLog.debug('Extracting data from HTML selectors.');
-                    title = cleanText($('h1.job-header__title').first().text());
-                    company = cleanText($('div.job-header__company > a').first().text());
-                    location = cleanText($('span.job-location').first().text());
-                    date_posted = cleanText($('span.job-post-date').first().text());
+                    title = cleanText($('h1[itemprop="title"]').first().text() || 
+                                      $('h1.job-title').first().text() || 
+                                      $('h1').first().text());
+                    
+                    company = cleanText($('div[itemprop="hiringOrganization"] a').first().text() || 
+                                        $('.job-header__company a').first().text() || 
+                                        $('.company-name a').first().text() || 
+                                        $('[data-job-company]').first().text());
+                    
+                    location = cleanText($('span[itemprop="jobLocation"]').first().text() || 
+                                         $('.job-location').first().text() || 
+                                         $('.location').first().text());
+                    
+                    date_posted = cleanText($('time[itemprop="datePosted"]').attr('datetime') || 
+                                            $('.job-post-date').first().text() || 
+                                            $('.posted-date').first().text());
                     
                     const container = findBestDescriptionContainer($);
                     description_html = sanitizeDescription($, container, request.url);
