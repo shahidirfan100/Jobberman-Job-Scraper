@@ -75,12 +75,6 @@
       "type": "string",
       "description": "Optional raw 'Cookie' header string. Can help bypass consent banners.",
       "editor": "textfield"
-    },
-    "cookiesJson": {
-      "title": "Custom cookies (JSON)",
-      "type": "string",
-      "description": "Optional JSON-formatted cookies. Accepts an array (e.g., [{"name":"a","value":"1"}]) or an object map (e.g., {"a":"1"}).",
-      "editor": "textarea"
     }
   },
   "required": [],
