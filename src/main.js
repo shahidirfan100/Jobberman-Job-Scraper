@@ -28,7 +28,7 @@ const getFullText = ($el) => {
   return cleanText(rich || $el.text());
 };
 
-// Keep only text-related tags; strip all attributes **without** using removeAttr (fixes your error)
+// Keep only text-related tags; strip all attributes **without** using removeAttr
 const sanitizeDescription = ($ctx, $fragment, baseUrl) => {
   if (!$fragment || !$fragment.length) return '';
   // Work on a dedicated cheerio root to avoid side-effects
@@ -44,14 +44,13 @@ const sanitizeDescription = ($ctx, $fragment, baseUrl) => {
     // Cheerio element nodes have type === 'tag' and the tag name in el.name
     const isTag = el && el.type === 'tag';
     const tag = isTag ? String(el.name || '').toLowerCase() : '';
-
-    if (!isTag) return; // ignore text/comment nodes
+    if (!isTag) return;
 
     // Preserve only absolute href for anchors
     const isAnchor = tag === 'a';
     let href = isAnchor ? (el.attribs?.href || '') : '';
 
-    // Reset attributes safely (avoid $().removeAttr(...))
+    // Reset attributes safely
     el.attribs = {};
     if (isAnchor && href) {
       const abs = toAbs(href, baseUrl);
@@ -69,8 +68,7 @@ const sanitizeDescription = ($ctx, $fragment, baseUrl) => {
 
   // Remove empty nodes (except <br>)
   $('#__root').find('*').each((_, el) => {
-    const isTag = el && el.type === 'tag';
-    if (!isTag) return;
+    if (!el || el.type !== 'tag') return;
     const tag = (el.name || '').toLowerCase();
     if (tag === 'br') return;
     const $el = $(el);
@@ -201,11 +199,13 @@ const enrichFromJsonLd = (jsonLd, fields, baseUrl) => {
 // ------------------------- LISTING PAGE HELPERS -------------------------
 const collectJobLinks = ($, base) => {
   const links = new Set();
+  // Primary pattern: /listings/<slug>
   $('a[href*="/listings/"]').each((_, a) => {
     const href = $(a).attr('href');
     const abs = href && toAbs(href, base);
     if (abs && !abs.includes('#')) links.add(abs.split('?')[0]);
   });
+  // Fallbacks
   if (links.size === 0) {
     $('.job-list li a, .job-card a, .search-result-item a, .job-item a').each((_, a) => {
       const href = $(a).attr('href');
@@ -278,6 +278,18 @@ const extractFromListingCard = ($, $card) => {
   return res;
 };
 
+// ------------------------- DETAIL EXTRACTION -------------------------
+const biggestTextBlockHeuristic = ($) => {
+  const candidates = [];
+  $('main, article').find('section, div, article').each((_, n) => {
+    const $n = $(n);
+    const txt = cleanText($n.text() || '');
+    if (txt.length > 400) candidates.push({ $n, len: txt.length });
+  });
+  candidates.sort((a, b) => b.len - a.len);
+  return candidates.length ? candidates[0].$n : null;
+};
+
 const extractFromDetail = ({ request, $ }) => {
   const sel = buildSelectorMap();
   let seed = request.userData?.seed || {};
@@ -316,15 +328,8 @@ const extractFromDetail = ({ request, $ }) => {
     }
   }
   if (!description_text) {
-    const candidates = [];
-    $('main, article').find('section, div, article').each((_, n) => {
-      const $n = $(n);
-      const txt = cleanText($n.text() || '');
-      if (txt.length > 400) candidates.push({ $n, len: txt.length });
-    });
-    candidates.sort((a, b) => b.len - a.len);
-    if (candidates.length) {
-      const $big = candidates[0].$n;
+    const $big = biggestTextBlockHeuristic($);
+    if ($big) {
       description_html = sanitizeDescription($, $big.clone(), request.url) || description_html;
       description_text = cleanText($big.text()) || description_text;
     }
@@ -456,6 +461,7 @@ const crawler = new CheerioCrawler({
       try {
         const item = extractFromDetail({ request, $ });
         if (!cleanText(item.title)) return; // essential
+        // Even if description is thin, we keep core fields for structured export
         await Dataset.pushData(item);
         jobsScraped++;
         scrapedUrls.add(request.url);
