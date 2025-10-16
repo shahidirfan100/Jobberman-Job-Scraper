@@ -172,13 +172,6 @@ const cleanText = (text) => {
         .trim();
 };
 
-// >>> ADDED: prefer non-abbreviated text when available (title/aria-label/data-title)
-const getFullText = ($el) => {
-    if (!$el || !$el.length) return '';
-    const rich = $el.attr('title') || $el.attr('aria-label') || $el.attr('data-title') || '';
-    return cleanText(rich || $el.text());
-};
-
 // Helper to navigate DOM using XPath-like path (converted to jQuery traversal)
 const getElementByPath = ($, path) => {
     // XPath to CSS selector mapping for the specific structure
@@ -216,22 +209,22 @@ const sanitizeDescription = ($, el, baseUrl) => {
     // Allowed text-related HTML tags (keep structure, remove everything else)
     const allowedTags = ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'span', 'div', 'section', 'article'];
     
-    // >>> FIX: capture href BEFORE removing attributes so links are preserved
+    // Remove all attributes from all elements (including class, id, style)
     clone.find('*').each((_, node) => {
         const $node = $(node);
         const tagName = node.tagName ? node.tagName.toLowerCase() : '';
-
-        // capture original href first
-        const originalHref = tagName === 'a' ? ($node.attr('href') || '') : '';
-
-        // Remove all attributes
+        
+        // Remove all attributes first
         const attribs = Object.keys(node.attribs || {});
         attribs.forEach(attr => $node.removeAttr(attr));
-
-        // restore cleaned absolute href for anchors
-        if (tagName === 'a' && originalHref) {
-            const abs = toAbs(originalHref, baseUrl);
-            if (abs) $node.attr('href', abs);
+        
+        // For anchor tags, keep only href (cleaned)
+        if (tagName === 'a') {
+            const originalHref = $(node).attr('href');
+            if (originalHref) {
+                const abs = toAbs(originalHref, baseUrl);
+                if (abs) $node.attr('href', abs);
+            }
         }
         
         // Remove non-allowed tags but keep their text content
@@ -408,73 +401,34 @@ const crawler = new CheerioCrawler({
             let title, company, location, date_posted, job_type, salary_range, category, description_html, description_text;
 
             try {
-                // Try JSON-LD first (original logic)
+                // Try JSON-LD first
                 const jsonLdScript = $('script[type="application/ld+json"]').html();
-                let jsonLd = jsonLdScript ? safeJsonParse(jsonLdScript) : null;
+                const jsonLd = jsonLdScript ? safeJsonParse(jsonLdScript) : null;
 
-                // >>> ADDED: if first script isn't JobPosting, scan all scripts and pick the JobPosting node
-                if (!jsonLd || (jsonLd && jsonLd['@type'] !== 'JobPosting')) {
-                    $('script[type="application/ld+json"]').each((_, s) => {
-                        const raw = $(s).contents().text();
-                        const parsed = safeJsonParse(raw);
-                        if (!parsed) return;
-                        const arr = Array.isArray(parsed) ? parsed : [parsed];
-                        for (const node of arr) {
-                            const t = node && node['@type'];
-                            const isJob = t === 'JobPosting' || (Array.isArray(t) && t.includes('JobPosting'));
-                            if (isJob) {
-                                jsonLd = node;
-                                return false; // break .each
-                            }
-                        }
-                    });
-                }
-
-                if (jsonLd && (jsonLd['@type'] === 'JobPosting' || (Array.isArray(jsonLd['@type']) && jsonLd['@type'].includes('JobPosting')))) {
+                if (jsonLd && jsonLd['@type'] === 'JobPosting') {
                     crawlerLog.debug('Extracting data from JSON-LD.');
                     title = jsonLd.title;
                     company = jsonLd.hiringOrganization?.name;
                     date_posted = jsonLd.datePosted;
-
-                    // >>> ADDED: employmentType may be string or array
-                    if (jsonLd.employmentType) {
-                        job_type = Array.isArray(jsonLd.employmentType)
-                            ? jsonLd.employmentType.join(', ')
-                            : jsonLd.employmentType;
-                    }
-
-                    // >>> ADDED: robust location extraction (arrays tolerated)
-                    const locNode = jsonLd.jobLocation;
-                    const getAddrParts = (addr) => {
-                        const parts = [addr?.addressLocality, addr?.addressRegion, addr?.addressCountry].filter(Boolean);
-                        return parts.join(', ');
-                    };
-                    if (Array.isArray(locNode) && locNode.length) {
-                        location = getAddrParts(locNode[0]?.address) || location;
-                    } else if (locNode && typeof locNode === 'object') {
-                        location = getAddrParts(locNode.address) || location;
-                    }
-
-                    // Extract salary from JSON-LD (more tolerant)
+                    job_type = jsonLd.employmentType;
+                    const { addressLocality, addressRegion } = jsonLd.jobLocation?.address || {};
+                    location = [addressLocality, addressRegion].filter(Boolean).join(', ');
+                    
+                    // Extract salary from JSON-LD
                     if (jsonLd.baseSalary) {
-                        const sal = jsonLd.baseSalary;
-                        const currency = sal.currency || sal.value?.currency || 'NGN';
-                        const val = sal.value || sal;
-                        const min = (val && (val.minValue ?? val.value ?? val.amount)) || '';
-                        const max = (val && (val.maxValue ?? '')) || '';
-                        const mk = (n) => (n === '' ? '' : `${currency} ${Number(n).toLocaleString()}`);
-                        const range = [mk(min), mk(max)].filter(Boolean).join(' - ');
-                        if (range) salary_range = range;
+                        const salaryValue = jsonLd.baseSalary.value || {};
+                        if (salaryValue.minValue || salaryValue.maxValue) {
+                            const currency = jsonLd.baseSalary.currency || 'NGN';
+                            const min = salaryValue.minValue ? `${currency} ${salaryValue.minValue.toLocaleString()}` : '';
+                            const max = salaryValue.maxValue ? `${currency} ${salaryValue.maxValue.toLocaleString()}` : '';
+                            salary_range = [min, max].filter(Boolean).join(' - ');
+                        }
                     }
                     
-                    // Description from JSON-LD (wrap then sanitize)
-                    const descRaw = jsonLd.description || '';
-                    const $wrapped = cheerioLoad(`<div>${descRaw}</div>`);
-                    const wrapper = $wrapped('div').first();
-                    description_text = cleanText(wrapper.text());
-                    description_html = sanitizeDescription($wrapped, wrapper, request.url);
+                    description_text = cleanText(cheerioLoad(jsonLd.description || '').text());
+                    description_html = sanitizeDescription($, cheerioLoad(jsonLd.description || ''), request.url);
                 } else {
-                    // HTML selectors for Jobberman - using exact XPath conversions (original logic)
+                    // HTML selectors for Jobberman - using exact XPath conversions
                     crawlerLog.debug('Extracting data from HTML selectors using XPath mappings.');
                     
                     // Extract using precise XPath-converted selectors
@@ -493,71 +447,16 @@ const crawler = new CheerioCrawler({
                     location = cleanText(locationEl.text());
                     salary_range = cleanText(salaryEl.text());
                     category = cleanText(categoryEl.text());
-
-                    // >>> ADDED: prefer non-abbreviated values if attributes carry full text
-                    if (job_type) job_type = getFullText(jobTypeEl) || job_type;
-                    if (location) location = getFullText(locationEl) || location;
-                    if (salary_range) salary_range = getFullText(salaryEl) || salary_range;
                     
-                    // Fallback selectors if XPath-converted selectors don't work (original)
+                    // Fallback selectors if XPath-converted selectors don't work
                     if (!title) {
                         title = cleanText($('h1').first().text());
                     }
                     if (!company) {
                         company = cleanText($('h2').first().text());
                     }
-
-                    // >>> ADDED: extra fallbacks for job_type/location/salary in DOM
-                    if (!job_type) {
-                        const jt = [
-                            '[itemprop="employmentType"]',
-                            'a[href*="employment" i]',
-                            '[class*="employment" i] a',
-                            '.job-meta a:nth-of-type(2)'
-                        ].map(sel => $(sel).first()).find($el => $el && $el.length);
-                        if (jt) job_type = getFullText(jt) || cleanText(jt.text());
-                    }
-
-                    if (!location) {
-                        const locSel = [
-                            '[itemprop="jobLocation"] [itemprop*="addressLocality" i]',
-                            '[class*="location" i] a',
-                            '.job-meta a:nth-of-type(1)'
-                        ].map(sel => $(sel).first()).find($el => $el && $el.length);
-                        if (locSel) location = getFullText(locSel) || cleanText(locSel.text());
-                    }
-
-                    if (!salary_range) {
-                        const sCandidates = [
-                            '[class*="salary" i]',
-                            '[itemprop="baseSalary"]',
-                            'span:contains("Salary")',
-                            '.job-salary'
-                        ];
-                        let sEl = null;
-                        for (const sel of sCandidates) {
-                            const $cand = $(sel).first();
-                            if ($cand && $cand.length && cleanText($cand.text())) { sEl = $cand; break; }
-                        }
-                        if (sEl) {
-                            const raw = getFullText(sEl) || cleanText(sEl.text());
-                            // simple NGN range parser
-                            const m = raw.match(/([A-Z]{3})?\s?([\d,]+)(?:\s*-\s*|\s+to\s+)([A-Z]{3})?\s?([\d,]+)/i);
-                            if (m) {
-                                const c1 = m[1] || m[3] || 'NGN';
-                                const min = m[2].replace(/,/g, '');
-                                const max = m[4].replace(/,/g, '');
-                                salary_range = `${c1} ${Number(min).toLocaleString()} - ${c1} ${Number(max).toLocaleString()}`;
-                            } else {
-                                // single value like "NGN 250,000 per month"
-                                const m2 = raw.match(/([A-Z]{3})\s*([\d,]+)/i);
-                                if (m2) salary_range = `${m2[1]} ${m2[2]}`;
-                                else salary_range = raw; // last resort
-                            }
-                        }
-                    }
                     
-                    // Date posted - look for "New", "Today", "Yesterday", "X days ago", etc. (original)
+                    // Date posted - look for "New", "Today", "Yesterday", "X days ago", etc.
                     const datePatterns = ['New', 'Today', 'Yesterday'];
                     const bodyText = $('body').text();
                     for (const pattern of datePatterns) {
@@ -573,12 +472,12 @@ const crawler = new CheerioCrawler({
                         }
                     }
                     
-                    // Description extraction from XPath element (original)
+                    // Description extraction from XPath element
                     if (descriptionEl.length > 0) {
                         description_html = sanitizeDescription($, descriptionEl, request.url);
                         description_text = cleanText(descriptionEl.text());
                     } else {
-                        // Fallback: find Job Summary and Job Description sections (original)
+                        // Fallback: find Job Summary and Job Description sections
                         const descriptionSections = [];
                         
                         $('h3, h2, h4').each((_, heading) => {
