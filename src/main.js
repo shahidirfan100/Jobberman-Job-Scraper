@@ -136,7 +136,7 @@ const cleanText = (text) => {
     return String(text || '')
         .replace(/[
 	]+/g, ' ')
-        .replace(/[^ -~ -ɏḀ-ỿ]/g, '')
+        .replace(/[^\u0020-\u007E\u00A0-\u024F\u1E00-\u1EFF]/g, '')
         .trim();
 };
 
