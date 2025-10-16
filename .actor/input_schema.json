@@ -1,0 +1,88 @@
+{
+  "title": "Jobberman Jobs Scraper",
+  "description": "Scrape jobs from Jobberman.com listings. Provide either keyword/location OR a Jobberman search URL (startUrl, url, or startUrls). Actor paginates and optionally scrapes detail pages.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Start scraping from a specific Jobberman.com search URL. If provided, this will be used instead of Keyword/Location.",
+      "editor": "textfield"
+    },
+    "keyword": {
+      "title": "Keyword (if not using Start URL)",
+      "type": "string",
+      "description": "Job search keyword(s), e.g., 'Software Developer', 'Marketing Manager', 'Data Analyst', 'Nurse', 'Sales Representative'.",
+      "editor": "textfield",
+      "prefill": "software engineer"
+    },
+    "location": {
+      "title": "Location (if not using Start URL)",
+      "type": "string",
+      "description": "Geographic location to search in, e.g., 'Lagos', 'Abuja', 'Port Harcourt', 'Ibadan', 'Kano'.",
+      "editor": "textfield",
+      "prefill": "Lagos"
+    },
+    "posted_date": {
+      "title": "Posted Date (if not using Start URL)",
+      "type": "string",
+      "description": "Filter jobs by how recently they were posted.",
+      "enum": [
+        "anytime",
+        "24h",
+        "7d",
+        "30d"
+      ],
+      "prefill": "anytime",
+      "editor": "select"
+    },
+    "collectDetails": {
+      "title": "Collect job details",
+      "type": "boolean",
+      "description": "If enabled, scraper opens job detail pages for full description/salary.",
+      "editor": "checkbox",
+      "default": true
+    },
+    "results_wanted": {
+      "title": "Maximum number of jobs",
+      "type": "integer",
+      "description": "The maximum number of jobs to collect. Leave empty to collect all available jobs.",
+      "minimum": 1,
+      "default": 50,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "Maximum number of pages",
+      "type": "integer",
+      "description": "A safety cap on the number of search result pages to visit.",
+      "minimum": 1,
+      "editor": "number",
+      "default": 10
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Use Apify Proxy for the best results.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["AUTO"]
+      }
+    },
+    "cookies": {
+      "title": "Custom cookies (raw header)",
+      "type": "string",
+      "description": "Optional raw 'Cookie' header string. Can help bypass consent banners.",
+      "editor": "textfield"
+    },
+    "cookiesJson": {
+      "title": "Custom cookies (JSON)",
+      "type": "string",
+      "description": "Optional JSON-formatted cookies. Accepts an array (e.g., [{"name":"a","value":"1"}]) or an object map (e.g., {"a":"1"}).",
+      "editor": "textarea"
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
