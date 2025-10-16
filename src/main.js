@@ -144,11 +144,22 @@ const parseJsonLdJob = ($) => {
     const raw = $(s).contents().text();
     const parsed = safeJsonParse(raw);
     if (!parsed) return;
-    const arr = Array.isArray(parsed) ? parsed : [parsed];
-    for (const node of arr) {
+    
+    // Handle @graph structure
+    let candidates = [];
+    if (parsed['@graph'] && Array.isArray(parsed['@graph'])) {
+      candidates = parsed['@graph'];
+    } else {
+      candidates = Array.isArray(parsed) ? parsed : [parsed];
+    }
+    
+    for (const node of candidates) {
       const t = node && node['@type'];
       const isJob = t === 'JobPosting' || (Array.isArray(t) && t.includes('JobPosting'));
-      if (isJob) { job = node; return false; }
+      if (isJob) { 
+        job = node; 
+        return false; // Break out of .each()
+      }
     }
   });
   return job;
@@ -157,42 +168,69 @@ const parseJsonLdJob = ($) => {
 const enrichFromJsonLd = (jsonLd, fields, baseUrl) => {
   if (!jsonLd) return fields;
   const out = { ...fields };
+  
+  // Title
   out.title = jsonLd.title || out.title;
+  
+  // Company
   out.company = (jsonLd.hiringOrganization && (jsonLd.hiringOrganization.name || jsonLd.hiringOrganization['@name'])) || out.company;
+  
+  // Date Posted
   out.date_posted = jsonLd.datePosted || out.date_posted;
 
-  if (jsonLd.employmentType)
-    out.job_type = Array.isArray(jsonLd.employmentType) ? jsonLd.employmentType.join(', ') : jsonLd.employmentType;
+  // Employment Type - handle FULL_TIME, PART_TIME, etc.
+  if (jsonLd.employmentType) {
+    const empType = Array.isArray(jsonLd.employmentType) ? jsonLd.employmentType[0] : jsonLd.employmentType;
+    // Convert FULL_TIME to "Full Time", PART_TIME to "Part Time"
+    out.job_type = empType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  }
 
+  // Location - handle multiple formats
   const locNode = jsonLd.jobLocation || jsonLd.jobLocationType;
   if (locNode && typeof locNode === 'object') {
     const addr = Array.isArray(locNode) ? locNode[0]?.address : locNode.address;
     if (addr) {
-      const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry].filter(Boolean);
-      if (parts.length) out.location = out.location || parts.join(', ');
+      // Check for streetAddress (Jobberman uses this for city/state)
+      if (addr.streetAddress) {
+        out.location = addr.streetAddress;
+      } else {
+        // Fallback to locality/region/country
+        const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry].filter(Boolean);
+        if (parts.length) out.location = out.location || parts.join(', ');
+      }
     }
   }
 
+  // Salary - handle nested value structure
   const sal = jsonLd.baseSalary;
   if (sal) {
     const currency = sal.currency || sal.value?.currency || 'NGN';
     const val = sal.value || sal;
     const min = (val && (val.minValue ?? val.value ?? val.amount)) || '';
     const max = (val && (val.maxValue ?? '')) || '';
-    const mk = (n) => (n === '' ? '' : `${currency} ${Number(n).toLocaleString()}`);
-    const range = [mk(min), mk(max)].filter(Boolean).join(' - ');
-    out.salary_range = range || out.salary_range;
+    
+    if (min || max) {
+      const mk = (n) => (n === '' ? '' : `${currency} ${Number(n).toLocaleString()}`);
+      const range = [mk(min), mk(max)].filter(Boolean).join(' - ');
+      out.salary_range = range || out.salary_range;
+    }
   }
 
-  if (jsonLd.industry && !out.category)
+  // Category - use occupationalCategory or industry
+  if (jsonLd.occupationalCategory && !out.category) {
+    out.category = Array.isArray(jsonLd.occupationalCategory) ? jsonLd.occupationalCategory[0] : jsonLd.occupationalCategory;
+  } else if (jsonLd.industry && !out.category) {
     out.category = Array.isArray(jsonLd.industry) ? jsonLd.industry[0] : jsonLd.industry;
+  }
 
+  // Description
   if (jsonLd.description) {
     const $wrap = cheerioLoad(`<div>${jsonLd.description}</div>`);
     const frag = $wrap('div').first();
     out.description_html = sanitizeDescription($wrap, frag, baseUrl) || out.description_html;
     out.description_text = cleanText(frag.text()) || out.description_text;
   }
+  
   return out;
 };
 
