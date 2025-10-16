@@ -167,42 +167,78 @@ const findBestDescriptionContainer = ($) => {
 
 const cleanText = (text) => {
     return String(text || '')
-        .replace(/[\\r\\n\\t]+/g, ' ')
-        .replace(/[^\\u0020-\\u007E\\u00A0-\\u024F\\u1E00-\\u1EFF]/g, '')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/[^\u0020-\u007E\u00A0-\u024F\u1E00-\u1EFF]/g, '')
         .trim();
 };
+
+// Helper to navigate DOM using XPath-like path (converted to jQuery traversal)
+const getElementByPath = ($, path) => {
+    // XPath to CSS selector mapping for the specific structure
+    const xpathMap = {
+        // Title: /html/body/main/section/div[2]/div[2]/div[2]/div[1]/div[1]/div/article/div[2]/div[2]/h1
+        'title': 'main section > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div > article > div:nth-child(2) > div:nth-child(2) > h1',
+        // Company: /html/body/main/section/div[2]/div[2]/div[2]/div[1]/div[1]/div/article/div[2]/div[2]/h2[1]
+        'company': 'main section > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div > article > div:nth-child(2) > div:nth-child(2) > h2:nth-child(1)',
+        // Job Type: /html/body/main/section/div[2]/div[2]/div[2]/div[1]/div[1]/div/article/div[2]/div[2]/div[1]/a[2]
+        'job_type': 'main section > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div > article > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > a:nth-child(2)',
+        // Location: /html/body/main/section/div[2]/div[2]/div[2]/div[1]/div[1]/div/article/div[2]/div[2]/div[1]/a[1]
+        'location': 'main section > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div > article > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > a:nth-child(1)',
+        // Salary: /html/body/main/section/div[2]/div[2]/div[2]/div[1]/div[1]/div/article/div[2]/div[2]/div[2]/span
+        'salary': 'main section > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div > article > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > span',
+        // Category: /html/body/main/section/div[2]/div[2]/div[2]/div[1]/div[1]/div/article/div[2]/div[2]/div[2]/a
+        'category': 'main section > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div > article > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > a',
+        // Description: /html/body/main/section/div[2]/div[2]/div[2]/div[1]/div[1]/div/article/div[4]
+        'description': 'main section > div:nth-child(2) > div:nth-child(2) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div > article > div:nth-child(4)',
+    };
+    
+    return xpathMap[path] ? $(xpathMap[path]) : $();
+};
+
 
 const sanitizeDescription = ($, el, baseUrl) => {
     if (!el || !el.length) return '';
     const clone = el.clone();
     
-    // Remove unwanted elements
+    // Remove unwanted elements completely
     clone.find('script, style, noscript, svg, button, form, header, footer, nav, aside, iframe').remove();
     clone.find('[class*="social"], [class*="share"], [class*="apply"], [class*="login"]').remove();
     clone.find('[class*="banner"], [class*="ad-"], [class*="advertisement"]').remove();
-    clone.find('[id*="ad-"], [id*="banner"]').remove();
+    clone.find('[id*="ad-"], [id*="banner"], [class*="cookie"]').remove();
     
-    // Remove inline styles and clean attributes
+    // Allowed text-related HTML tags (keep structure, remove everything else)
+    const allowedTags = ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'span', 'div', 'section', 'article'];
+    
+    // Remove all attributes from all elements (including class, id, style)
     clone.find('*').each((_, node) => {
         const $node = $(node);
-        const attribs = Object.keys(node.attribs || {});
+        const tagName = node.tagName ? node.tagName.toLowerCase() : '';
         
-        if (node.tagName === 'a') {
-            const href = $node.attr('href');
-            // Remove all attributes
-            attribs.forEach(attr => $node.removeAttr(attr));
-            // Re-add cleaned href
-            if (href) {
-                const abs = toAbs(href, baseUrl);
+        // Remove all attributes first
+        const attribs = Object.keys(node.attribs || {});
+        attribs.forEach(attr => $node.removeAttr(attr));
+        
+        // For anchor tags, keep only href (cleaned)
+        if (tagName === 'a') {
+            const originalHref = $(node).attr('href');
+            if (originalHref) {
+                const abs = toAbs(originalHref, baseUrl);
                 if (abs) $node.attr('href', abs);
             }
-        } else {
-            // For all other elements, remove all attributes (including class, style, id, etc.)
-            attribs.forEach(attr => $node.removeAttr(attr));
+        }
+        
+        // Remove non-allowed tags but keep their text content
+        if (!allowedTags.includes(tagName)) {
+            const text = $node.text();
+            if (text.trim()) {
+                $node.replaceWith(text);
+            } else {
+                $node.remove();
+            }
         }
     });
 
-    // Remove empty elements (multiple passes to handle nested empty elements)
+    // Remove empty elements (multiple passes for nested empties)
     for (let i = 0; i < 5; i++) {
         const empties = clone.find('*').filter((_, n) => {
             const $n = $(n);
@@ -214,11 +250,32 @@ const sanitizeDescription = ($, el, baseUrl) => {
         if (empties.length === 0) break;
         empties.remove();
     }
+    
+    // Unwrap unnecessary nested divs/spans that have no attributes
+    for (let i = 0; i < 3; i++) {
+        clone.find('div, span, section, article').each((_, el) => {
+            const $el = $(el);
+            // If it has no attributes and only one child, unwrap it
+            if (Object.keys(el.attribs || {}).length === 0) {
+                const children = $el.children();
+                if (children.length === 1) {
+                    $el.replaceWith(children);
+                }
+            }
+        });
+    }
 
-    const html = clone.html() || '';
+    let html = clone.html() || '';
     clone.remove();
-    // Clean up excessive whitespace but preserve line breaks
-    return html.replace(/\s+/g, ' ').replace(/>\s+</g, '><').trim();
+    
+    // Clean up excessive whitespace but preserve structure
+    html = html
+        .replace(/\s+/g, ' ')           // Multiple spaces to one
+        .replace(/>\s+</g, '><')        // Remove space between tags
+        .replace(/<br\s*\/?>\s*/gi, '<br>') // Clean br tags
+        .trim();
+    
+    return html;
 };
 
 const normalizeCookieHeader = ({ cookies, cookiesJson }) => {
@@ -371,94 +428,32 @@ const crawler = new CheerioCrawler({
                     description_text = cleanText(cheerioLoad(jsonLd.description || '').text());
                     description_html = sanitizeDescription($, cheerioLoad(jsonLd.description || ''), request.url);
                 } else {
-                    // HTML selectors for Jobberman - based on actual page structure with CSS classes
-                    crawlerLog.debug('Extracting data from HTML selectors.');
+                    // HTML selectors for Jobberman - using exact XPath conversions
+                    crawlerLog.debug('Extracting data from HTML selectors using XPath mappings.');
                     
-                    // Title: Using the specific title class
-                    title = cleanText($('.mt-6.mb-3.font-medium.text-lg, h1').first().text());
+                    // Extract using precise XPath-converted selectors
+                    const titleEl = getElementByPath($, 'title');
+                    const companyEl = getElementByPath($, 'company');
+                    const jobTypeEl = getElementByPath($, 'job_type');
+                    const locationEl = getElementByPath($, 'location');
+                    const salaryEl = getElementByPath($, 'salary');
+                    const categoryEl = getElementByPath($, 'category');
+                    const descriptionEl = getElementByPath($, 'description');
                     
-                    // Company: h2 right after h1
-                    company = cleanText($('h2').first().text());
+                    // Extract complete text (not abbreviations)
+                    title = cleanText(titleEl.text());
+                    company = cleanText(companyEl.text());
+                    job_type = cleanText(jobTypeEl.text());
+                    location = cleanText(locationEl.text());
+                    salary_range = cleanText(salaryEl.text());
+                    category = cleanText(categoryEl.text());
                     
-                    // Extract badges with class: text-sm font-normal px-3 rounded bg-brand-secondary-50 mr-2 mb-3 inline-block text-gray-700
-                    // These badges contain: location, job type, and category
-                    const badges = $('.text-sm.font-normal.px-3.rounded.bg-brand-secondary-50, .text-sm.font-normal.px-3.rounded, a[class*="text-sm"][class*="px-3"][class*="rounded"]').toArray();
-                    
-                    const locations = [];
-                    const jobTypes = [];
-                    const categories = [];
-                    
-                    // Process each badge to categorize them
-                    badges.forEach((badge) => {
-                        const $badge = $(badge);
-                        const text = cleanText($badge.text());
-                        const href = $badge.attr('href') || '';
-                        
-                        if (!text || text.length < 2) return;
-                        
-                        // Categorize based on href pattern or known values
-                        if (href.includes('/jobs/') && !href.includes('industry=') && !href.includes('full-time') && !href.includes('part-time')) {
-                            // Location badges link to location-filtered jobs
-                            const locationMatch = href.match(/\/jobs\/[^\/]+\/([^\/\?]+)/);
-                            if (locationMatch || /^[A-Za-z\s&-]+$/.test(text)) {
-                                locations.push(text);
-                            }
-                        } else if (text.toLowerCase().includes('time') || text.toLowerCase().includes('contract') || 
-                                   text.toLowerCase().includes('internship') || text.toLowerCase().includes('temporary') ||
-                                   href.includes('full-time') || href.includes('part-time')) {
-                            // Job type badges
-                            jobTypes.push(text);
-                        } else if (href.includes('industry=') || href.match(/\/jobs\/([^\/\?]+)/)) {
-                            // Category/Industry badges
-                            categories.push(text);
-                        } else {
-                            // Fallback: check text patterns
-                            const lowerText = text.toLowerCase();
-                            if (lowerText.includes('full') || lowerText.includes('part') || lowerText.includes('contract') || lowerText.includes('internship')) {
-                                jobTypes.push(text);
-                            } else if (text.includes('&') || text.includes(',')) {
-                                // Location often has '&' like "Lagos & Oyo State"
-                                locations.push(text);
-                            } else {
-                                // Default to category
-                                categories.push(text);
-                            }
-                        }
-                    });
-                    
-                    // Also check direct link selectors for location and job type
-                    $('a[href*="/jobs/"]').each((_, link) => {
-                        const $link = $(link);
-                        const href = $link.attr('href') || '';
-                        const text = cleanText($link.text());
-                        
-                        if (!text || badges.includes(link)) return; // Skip if already processed
-                        
-                        // Location links
-                        if (href.match(/\/jobs\/[^\/]+\/([^\/\?]+)/) && !href.includes('full-time') && !href.includes('part-time')) {
-                            if (!locations.includes(text) && text.length > 2) {
-                                locations.push(text);
-                            }
-                        }
-                        
-                        // Job type links
-                        if (href.includes('full-time') || href.includes('part-time') || href.includes('contract')) {
-                            if (!jobTypes.includes(text)) {
-                                jobTypes.push(text);
-                            }
-                        }
-                    });
-                    
-                    // Set final values (join if multiple found)
-                    location = locations.length > 0 ? locations.join(', ') : null;
-                    job_type = jobTypes.length > 0 ? jobTypes.join(', ') : null;
-                    category = categories.length > 0 ? categories.join(', ') : null;
-                    
-                    // Salary extraction - look for NGN or salary pattern in page text
-                    const pageText = $('body').text();
-                    const salaryMatch = pageText.match(/NGN\s*([\d,]+(?:\s*-\s*[\d,]+)?)/i);
-                    if (salaryMatch) {
-                        salary_range = cleanText(salaryMatch[0]);
+                    // Fallback selectors if XPath-converted selectors don't work
+                    if (!title) {
+                        title = cleanText($('h1').first().text());
+                    }
+                    if (!company) {
+                        company = cleanText($('h2').first().text());
                     }
                     
                     // Date posted - look for "New", "Today", "Yesterday", "X days ago", etc.
@@ -477,47 +472,48 @@ const crawler = new CheerioCrawler({
                         }
                     }
                     
-                    // Description extraction - find Job Summary and Job Description sections
-                    const descriptionSections = [];
-                    
-                    // Look for Job Summary section
-                    $('h3, h2, h4').each((_, heading) => {
-                        const headingText = $(heading).text().trim();
-                        if (headingText.match(/job\s+summary/i)) {
-                            // Get text until next heading
-                            let nextElement = $(heading).next();
-                            while (nextElement.length && !nextElement.is('h1, h2, h3, h4, h5, h6')) {
-                                if (nextElement.text().trim()) {
-                                    descriptionSections.push(nextElement);
-                                }
-                                nextElement = nextElement.next();
-                            }
-                        }
-                        if (headingText.match(/job\s+description|requirements/i)) {
-                            // Get text until next heading
-                            let nextElement = $(heading).next();
-                            while (nextElement.length && !nextElement.is('h1, h2, h3, h4, h5, h6')) {
-                                if (nextElement.text().trim()) {
-                                    descriptionSections.push(nextElement);
-                                }
-                                nextElement = nextElement.next();
-                            }
-                        }
-                    });
-                    
-                    // Build description HTML and text
-                    if (descriptionSections.length > 0) {
-                        const descContainer = $('<div></div>');
-                        descriptionSections.forEach(el => {
-                            descContainer.append($(el).clone());
-                        });
-                        description_html = sanitizeDescription($, descContainer, request.url);
-                        description_text = cleanText(descContainer.text());
+                    // Description extraction from XPath element
+                    if (descriptionEl.length > 0) {
+                        description_html = sanitizeDescription($, descriptionEl, request.url);
+                        description_text = cleanText(descriptionEl.text());
                     } else {
-                        // Fallback: use the best description container
-                        const container = findBestDescriptionContainer($);
-                        description_html = sanitizeDescription($, container, request.url);
-                        description_text = cleanText(container.text());
+                        // Fallback: find Job Summary and Job Description sections
+                        const descriptionSections = [];
+                        
+                        $('h3, h2, h4').each((_, heading) => {
+                            const headingText = $(heading).text().trim();
+                            if (headingText.match(/job\s+summary/i)) {
+                                let nextElement = $(heading).next();
+                                while (nextElement.length && !nextElement.is('h1, h2, h3, h4, h5, h6')) {
+                                    if (nextElement.text().trim()) {
+                                        descriptionSections.push(nextElement);
+                                    }
+                                    nextElement = nextElement.next();
+                                }
+                            }
+                            if (headingText.match(/job\s+description|requirements/i)) {
+                                let nextElement = $(heading).next();
+                                while (nextElement.length && !nextElement.is('h1, h2, h3, h4, h5, h6')) {
+                                    if (nextElement.text().trim()) {
+                                        descriptionSections.push(nextElement);
+                                    }
+                                    nextElement = nextElement.next();
+                                }
+                            }
+                        });
+                        
+                        if (descriptionSections.length > 0) {
+                            const descContainer = $('<div></div>');
+                            descriptionSections.forEach(el => {
+                                descContainer.append($(el).clone());
+                            });
+                            description_html = sanitizeDescription($, descContainer, request.url);
+                            description_text = cleanText(descContainer.text());
+                        } else {
+                            const container = findBestDescriptionContainer($);
+                            description_html = sanitizeDescription($, container, request.url);
+                            description_text = cleanText(container.text());
+                        }
                     }
                 }
 
