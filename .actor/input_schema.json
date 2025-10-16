@@ -20,16 +20,9 @@
       "title": "Start URLs",
       "type": "array",
       "description": "Array of URLs to start scraping from.",
-      "editor": "requestlist",
+      "editor": "select",
       "items": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "title": "URL",
-            "type": "string",
-            "description": "A Jobberman.com URL to scrape."
-          }
-        }
+        "type": "string"
       }
     },
     "keyword": {
