@@ -20,7 +20,7 @@
       "title": "Start URLs",
       "type": "array",
       "description": "Array of URLs to start scraping from.",
-      "editor": "requestListSources",
+      "editor": "select",
       "items": {
         "type": "string"
       }
