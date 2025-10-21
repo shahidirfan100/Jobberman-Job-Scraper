@@ -25,11 +25,15 @@
         "type": "object",
         "properties": {
           "url": {
+            "title": "URL",
             "type": "string",
+            "description": "A single URL to scrape.",
             "editor": "textfield"
           }
         },
-        "required": ["url"]
+        "required": [
+          "url"
+        ]
       }
     },
     "keyword": {
@@ -89,7 +93,9 @@
       "editor": "proxy",
       "default": {
         "useApifyProxy": true,
-        "apifyProxyGroups": ["AUTO"]
+        "apifyProxyGroups": [
+          "AUTO"
+        ]
       }
     },
     "cookies": {
