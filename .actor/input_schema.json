@@ -1,31 +1,53 @@
 {
   "title": "Jobberman Jobs Scraper",
-  "description": "Scrape jobs from Jobberman.com listings. Provide either keyword/location OR a Jobberman search URL (startUrl, url, or startUrls). Actor paginates and optionally scrapes detail pages.",
+  "description": "Scrape jobs from Jobberman.com. Provide either Keyword/Location inputs OR one of the Start URL inputs (Start URL, URL, or Start URLs).",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "startUrl": {
       "title": "Start URL",
       "type": "string",
-      "description": "Start scraping from a specific Jobberman.com search URL. If provided, this will be used instead of Keyword/Location.",
+      "description": "A single Jobberman.com search URL to start from. If provided, Keyword/Location inputs are ignored.",
       "editor": "textfield"
     },
+    "url": {
+      "title": "URL (alias for Start URL)",
+      "type": "string",
+      "description": "An alias for 'Start URL' for compatibility. If provided, Keyword/Location inputs are ignored.",
+      "editor": "textfield"
+    },
+    "startUrls": {
+      "title": "Start URLs (replaces all other inputs)",
+      "type": "array",
+      "description": "An array of start URLs. Overrides all other inputs (Keyword, Location, Start URL).",
+      "editor": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "editor": "textfield"
+          }
+        },
+        "required": ["url"]
+      }
+    },
     "keyword": {
-      "title": "Keyword (if not using Start URL)",
+      "title": "Keyword (if not using Start URLs)",
       "type": "string",
       "description": "Job search keyword(s), e.g., 'Software Developer', 'Marketing Manager', 'Data Analyst', 'Nurse', 'Sales Representative'.",
       "editor": "textfield",
       "prefill": "software engineer"
     },
     "location": {
-      "title": "Location (if not using Start URL)",
+      "title": "Location (if not using Start URLs)",
       "type": "string",
       "description": "Geographic location to search in, e.g., 'Lagos', 'Abuja', 'Port Harcourt', 'Ibadan', 'Kano'.",
       "editor": "textfield",
       "prefill": "Lagos"
     },
     "posted_date": {
-      "title": "Posted Date (if not using Start URL)",
+      "title": "Posted Date (if not using Start URLs)",
       "type": "string",
       "description": "Filter jobs by how recently they were posted.",
       "enum": [
@@ -47,7 +69,7 @@
     "results_wanted": {
       "title": "Maximum number of jobs",
       "type": "integer",
-      "description": "The maximum number of jobs to collect. Leave empty to collect all available jobs.",
+      "description": "The maximum number of jobs to collect. If left empty, the Actor will default to 100 jobs.",
       "minimum": 1,
       "default": 50,
       "editor": "number"
@@ -55,7 +77,7 @@
     "max_pages": {
       "title": "Maximum number of pages",
       "type": "integer",
-      "description": "A safety cap on the number of search result pages to visit.",
+      "description": "A safety cap on the number of search result pages to visit. If left empty, the Actor will default to 999 pages.",
       "minimum": 1,
       "editor": "number",
       "default": 10

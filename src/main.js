@@ -90,8 +90,10 @@ const buildStartUrl = (kw, loc, date) => {
   const u = new URL('https://www.jobberman.com/jobs');
   if (kw && String(kw).trim()) u.searchParams.set('q', String(kw).trim());
   if (loc && String(loc).trim()) u.searchParams.set('l', String(loc).trim());
-  const dateMap = { '24h': '1 day', '7d': '7 days', '30d': '30 days' };
-  if (date && dateMap[date]) u.searchParams.set('created_at', dateMap[date]);
+  // Handle tolerant date parsing
+  const dateMap = { '24h': '1 day', '7d': '7 days', '30d': '30 days', '1 day': '1 day', '7 days': '7 days', '30 days': '30 days' };
+  const normalizedDate = String(date).toLowerCase().replace(/\s+/g, '');
+  if (dateMap[normalizedDate]) u.searchParams.set('created_at', dateMap[normalizedDate]);
   return u.href;
 };
 
@@ -102,7 +104,9 @@ const normalizeCookieHeader = ({ cookies, cookiesJson }) => {
       const parsed = JSON.parse(cookiesJson);
       if (Array.isArray(parsed)) return parsed.map(c => `${c.name}=${c.value}`).join('; ');
       if (typeof parsed === 'object') return Object.entries(parsed).map(([k,v]) => `${k}=${v}`).join('; ');
-    } catch {}
+    } catch (e) {
+      log.warning(`Could not parse cookiesJson: ${e.message}`);
+    }
   }
   return '';
 };
@@ -260,8 +264,11 @@ const findNextUrl = ($, currentUrl) => {
     $('a[rel="next"]').attr('href') ||
     $('a').filter((_, a) => /Go to next page/i.test($(a).text())).attr('href');
   if (nextLink) return toAbs(nextLink, currentUrl);
+  
+  // Fallback for page=N increment
   const m = currentUrl.match(/[?&]page=(\d+)/);
   if (m) return currentUrl.replace(/([?&])page=\d+/, `$1page=${parseInt(m[1], 10) + 1}`);
+  // Fallback if no page=N is present
   return currentUrl.includes('?') ? `${currentUrl}&page=2` : `${currentUrl}?page=2`;
 };
 
@@ -271,6 +278,7 @@ const extractFromListingCard = ($, $card) => {
   const $titleA = $card.find('a[href*="/listings/"]').first();
   res.title = cleanText($titleA.text());
 
+  // Get all text nodes, split by newlines or multiple spaces, trim, and filter empties
   const lines = cleanText($card.text()).split(/\s{2,}|\n+/).map(s => s.trim()).filter(Boolean);
 
   // company
@@ -280,7 +288,8 @@ const extractFromListingCard = ($, $card) => {
     if (/\b(Easy Apply|FEATURED)\b/i.test(line)) continue;
     if (/\b(NGN|GHS|KES|ZAR|USD)\b\s*\d/i.test(line)) continue;
     if (/\b(Full\s*Time|Part\s*Time|Contract|Temporary|Internship|Remote|Hybrid|Freelance|Volunteer)\b/i.test(line)) continue;
-    res.company = line; break;
+    // First line that is not title, date, badge, salary, or job type is likely company
+    res.company = line; break; 
   }
 
   // meta: "LOCATION  JOB_TYPE  SALARY"
@@ -288,6 +297,7 @@ const extractFromListingCard = ($, $card) => {
   if (meta) {
     const jt = meta.match(/\b(Full\s*Time|Part\s*Time|Contract|Temporary|Internship|Remote|Hybrid|Freelance|Volunteer)\b/i);
     if (jt) res.job_type = jt[1].replace(/\s+/g, ' ');
+    // Location is everything before the job type
     const locPart = meta.split(jt ? jt[0] : '')[0];
     if (locPart) res.location = cleanText(locPart);
   }
@@ -319,12 +329,36 @@ const extractFromListingCard = ($, $card) => {
 // ------------------------- DETAIL EXTRACTION -------------------------
 const biggestTextBlockHeuristic = ($) => {
   const candidates = [];
+  // Look in main containers
   $('main, article').find('section, div, article').each((_, n) => {
     const $n = $(n);
-    const txt = cleanText($n.text() || '');
-    if (txt.length > 400) candidates.push({ $n, len: txt.length });
+    // Direct text content, ignoring children's text
+    const directText = ($n.contents().filter((i, el) => el.type === 'text').text() || '');
+    const txt = cleanText(directText);
+    
+    // Heuristic:
+    // - Must have significant direct text (e.g., > 400 chars)
+    // - Should not contain common list/card containers (lowers score)
+    // - Should not be a tiny wrapper (lowers score)
+    let score = txt.length;
+    if ($n.find('ul, ol, a[href*="/listings/"], .job-card').length > 0) score *= 0.1;
+    if ($n.children().length > 20) score *= 0.5; // Too many children, likely a wrapper
+    
+    if (score > 300) { // Lowered threshold for score
+        candidates.push({ $n, score, len: txt.length });
+    }
   });
-  candidates.sort((a, b) => b.len - a.len);
+  
+  // Also check all elements and find the one with the most text
+  $('body').find('*').each((_, n) => {
+     const $n = $(n);
+     const txt = cleanText($n.text() || '');
+     if (txt.length > 400 && $n.children().length < 10) { // Prefer nodes with fewer children
+         candidates.push({ $n, score: txt.length, len: txt.length });
+     }
+  });
+
+  candidates.sort((a, b) => b.score - a.score);
   return candidates.length ? candidates[0].$n : null;
 };
 
@@ -355,27 +389,40 @@ const extractFromDetail = ({ request, $ }) => {
     description_html = sanitizeDescription($, $desc.clone(), request.url);
     description_text = cleanText($desc.text());
   }
-  if (!description_text) {
-    const heading = $('h1:contains("Description"), h2:contains("Description"), h3:contains("Description")').first();
+  // Fallback 1: Heading-based
+  if (!description_text || description_text.length < 100) {
+    const heading = $('h1:contains("Description"), h2:contains("Description"), h3:contains("Description"), h4:contains("Description")').first();
     if (heading && heading.length) {
-      let $cand = heading.parent();
+      // Try to find the content block *after* the heading
+      let $cand = heading.nextAll('div, section').first();
+      if (!$cand.length) $cand = heading.parent(); // Fallback to parent
+      
       if ($cand && $cand.length) {
-        description_html = sanitizeDescription($, $cand.clone(), request.url) || description_html;
-        description_text = cleanText($cand.text()) || description_text;
+        const cand_html = sanitizeDescription($, $cand.clone(), request.url);
+        const cand_text = cleanText($cand.text());
+        if (cand_text.length > description_text.length) {
+            description_html = cand_html;
+            description_text = cand_text;
+        }
       }
     }
   }
-  if (!description_text) {
+  // Fallback 2: Biggest text block
+  if (!description_text || description_text.length < 100) {
     const $big = biggestTextBlockHeuristic($);
     if ($big) {
-      description_html = sanitizeDescription($, $big.clone(), request.url) || description_html;
-      description_text = cleanText($big.text()) || description_text;
+      const big_html = sanitizeDescription($, $big.clone(), request.url);
+      const big_text = cleanText($big.text());
+       if (big_text.length > description_text.length) {
+            description_html = big_html;
+            description_text = big_text;
+        }
     }
   }
 
   date_posted = extractDatePosted($) || '';
 
-  // JSON-LD
+  // JSON-LD (This is the most reliable source, so it runs last and overwrites)
   const jsonLd = parseJsonLdJob($);
   ({ title, company, job_type, location, salary_range, category, description_html, description_text, date_posted } =
     enrichFromJsonLd(jsonLd, { title, company, job_type, location, salary_range, category, description_html, description_text, date_posted }, request.url));
@@ -383,38 +430,59 @@ const extractFromDetail = ({ request, $ }) => {
   return { url: request.url, title, company, job_type, location, salary_range, category, description_html, description_text, date_posted };
 };
 
-const isDetailPage = ($) =>
-  $('article h1, header h1, .job-details h1, h1[class*="job" i]').length > 0 ||
-  $('script[type="application/ld+json"]').length > 0;
-
 // ------------------------- MAIN -------------------------
+// Wrap the entire run in the Actor.main() lifecycle hook
 await Actor.main(async () => {
+  // Safely read and validate input
   const input = (await Actor.getInput()) ?? {};
   const {
-    keyword = 'developer', // QA FIX: Provide a default keyword to ensure results on test runs
-    location: locationFilter = '',
-    posted_date = 'anytime',
-    results_wanted: RESULTS_WANTED_RAW = 100,
-    max_pages: MAX_PAGES_RAW = 999,
-    collectDetails = true,
+    keyword, // Use prefilled default from input schema
+    location: locationFilter, // Use prefilled default
+    posted_date = 'anytime', // Safe default
+    results_wanted: RESULTS_WANTED_RAW, // Use prefilled default
+    max_pages: MAX_PAGES_RAW, // Use prefilled default
+    collectDetails = true, // Safe default
     startUrl,
     url,
     startUrls,
     cookies,
     cookiesJson,
-    proxyConfiguration,
+    proxyConfiguration, // Honor the provided proxy config
   } = input;
 
-  const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : Number.MAX_SAFE_INTEGER;
-  const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 999;
+  // Safely parse numeric inputs with fallbacks
+  const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 100; // Use input default
+  const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 999; // Use input default
+
+  // Log the sanitized/final input parameters for QA
+  log.info('Actor starting with parameters:', {
+      keyword,
+      locationFilter,
+      posted_date,
+      RESULTS_WANTED,
+      MAX_PAGES,
+      collectDetails,
+      hasStartUrls: (startUrls && startUrls.length > 0) || !!startUrl || !!url,
+      hasProxy: !!proxyConfiguration,
+  });
 
   const initialUrls = [];
+  // Build the search URL from inputs
   const builtStartUrl = buildStartUrl(keyword, locationFilter, posted_date);
-  if (Array.isArray(startUrls) && startUrls.length) initialUrls.push(...startUrls.map(o => o.url || o));
-  if (startUrl) initialUrls.push(startUrl);
-  if (url) initialUrls.push(url);
-  if (initialUrls.length === 0) initialUrls.push(builtStartUrl);
+  
+  // Respect user-provided start URLs first
+  if (Array.isArray(startUrls) && startUrls.length) {
+      initialUrls.push(...startUrls.map(o => (typeof o === 'string' ? o : o?.url)).filter(Boolean));
+  }
+  if (startUrl && typeof startUrl === 'string') initialUrls.push(startUrl);
+  if (url && typeof url === 'string') initialUrls.push(url);
+  
+  // Fallback to the built search URL if no other URLs were provided
+  if (initialUrls.length === 0) {
+      initialUrls.push(builtStartUrl);
+  }
 
+  // Honor proxy configuration exactly as provided
   const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : undefined;
 
   let jobsScraped = 0;
@@ -423,17 +491,20 @@ await Actor.main(async () => {
 
   const crawler = new CheerioCrawler({
     proxyConfiguration: proxyConf,
+    // Keep performance settings intact as requested
     maxRequestsPerMinute: 120,
     requestHandlerTimeoutSecs: 45,
     navigationTimeoutSecs: 45,
-    maxConcurrency: 20, // QA FIX: Increased concurrency for faster execution
+    maxConcurrency: 20, 
     useSessionPool: true,
     persistCookiesPerSession: true,
     sessionPoolOptions: { maxPoolSize: 50, sessionOptions: { maxUsageCount: 50, maxErrorScore: 3 } },
-    maxRequestRetries: 5,
-    maxRequestsPerCrawl: Math.max(RESULTS_WANTED * 3, 1000),
+    maxRequestRetries: 5, // Use standard retries
+    // Max requests per crawl as a safety rail, respecting limits
+    maxRequestsPerCrawl: Math.max(RESULTS_WANTED * (collectDetails ? 3 : 1), MAX_PAGES, 1000),
 
-    preNavigationHooks: [({ request }) => {
+    preNavigationHooks: [({ request, session }) => {
+      // Keep stealth headers intact
       request.headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -447,64 +518,101 @@ await Actor.main(async () => {
         'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
         'Referer': request.userData?.label === 'DETAIL' ? 'https://www.jobberman.com/jobs' : undefined,
       };
+      // Safely normalize and add cookies
       const cookieHeader = normalizeCookieHeader({ cookies, cookiesJson });
       if (cookieHeader) request.headers.Cookie = cookieHeader;
     }],
 
-    async requestHandler({ request, $, enqueueLinks }) {
-      // QA FIX: Wrap handler in try/catch for robust error handling
+    async requestHandler({ request, $, enqueueLinks, response }) {
+      // Robust error handling inside the handler
       try {
         if (!$ || typeof $.html !== 'function') {
-            log.warning(`Skipping request, Cheerio object not available: ${request.url}`);
+            log.warning(`Skipping request, Cheerio object not available (HTTP ${response.statusCode}): ${request.url}`);
+            request.retry('cheerio-not-loaded'); // Ask for a retry
             return;
         }
 
         const { label = 'LIST', pageNo = 1 } = request.userData;
 
         if (label === 'LIST') {
+          log.info(`Processing LIST page ${pageNo}: ${request.url}`);
           // collect links & per-card seeds
           const links = collectJobLinks($, request.url);
+          if (links.length === 0) {
+              log.warning(`No job links found on LIST page: ${request.url}`);
+          }
+          
           const seedsByUrl = new Map();
           $('a[href*="/listings/"]').each((_, a) => {
             const href = $(a).attr('href');
             const abs = href && toAbs(href, request.url);
             if (!abs) return;
             const u = abs.split('?')[0];
-            const $card = $(a).closest('li, article, .search-result-item, .job-card, .job-item, .search-result, div');
+            // Find the closest common ancestor card
+            const $card = $(a).closest('li, article, .search-result-item, .job-card, .job-item, .search-result, div[class*="job"], div[class*="listing"]');
             const seed = extractFromListingCard($, $card);
             if (seed.title) seedsByUrl.set(u, seed);
           });
 
           if (!collectDetails) {
+            // Stop enqueueing when limit is hit
             const toPush = links.slice(0, RESULTS_WANTED - jobsScraped);
             if (toPush.length > 0) {
               const items = toPush.map(u => ({ url: u, ...(seedsByUrl.get(u) || {}), _source: 'jobberman.com' }));
               await Dataset.pushData(items);
               jobsScraped += items.length;
+              log.info(`Pushed ${items.length} items directly from list page. Total: ${jobsScraped}`);
             }
           } else {
+            // Stop enqueueing when limit is hit
             const toEnqueue = links.slice(0, RESULTS_WANTED - jobsEnqueued);
             for (const u of toEnqueue) {
-              await enqueueLinks({ urls: [u], userData: { label: 'DETAIL', seed: seedsByUrl.get(u) || {} } });
-              jobsEnqueued++;
+              // Only enqueue if we haven't hit the total scraped/enqueued limit
+              if (jobsEnqueued < RESULTS_WANTED && jobsScraped < RESULTS_WANTED) {
+                 await enqueueLinks({ urls: [u], userData: { label: 'DETAIL', seed: seedsByUrl.get(u) || {} } });
+                 jobsEnqueued++;
+              }
             }
+            if (toEnqueue.length > 0) log.info(`Enqueued ${toEnqueue.length} detail pages. Total enqueued: ${jobsEnqueued}`);
           }
 
-          if (jobsScraped >= RESULTS_WANTED || jobsEnqueued >= RESULTS_WANTED || pageNo >= MAX_PAGES) {
-              log.info('Reached limit for jobs or pages. Stopping pagination.');
+          // Deterministic stop conditions
+          if (jobsScraped >= RESULTS_WANTED || jobsEnqueued >= RESULTS_WANTED) {
+              log.info(`Reached 'results_wanted' limit (${RESULTS_WANTED}). Stopping pagination.`);
+              return;
+          }
+          if (pageNo >= MAX_PAGES) {
+              log.info(`Reached 'max_pages' limit (${MAX_PAGES}). Stopping pagination.`);
+              return;
+          }
+          if (links.length === 0) {
+              log.warning(`No links found on page ${pageNo}, stopping pagination for this branch.`);
               return;
           }
 
           const nextUrl = findNextUrl($, request.url);
           if (nextUrl) {
+            log.info(`Enqueuing next LIST page ${pageNo + 1}: ${nextUrl}`);
             await enqueueLinks({ urls: [nextUrl], userData: { label: 'LIST', pageNo: pageNo + 1 }, forefront: true });
+          } else {
+            log.info(`No 'next' link found on page ${pageNo}.`);
           }
         }
 
         if (label === 'DETAIL') {
-          if (jobsScraped >= RESULTS_WANTED || scrapedUrls.has(request.url)) return;
+          // Deterministic stop condition
+          if (jobsScraped >= RESULTS_WANTED) {
+              log.info(`Skipping detail page, 'results_wanted' limit (${RESULTS_WANTED}) already met.`);
+              return;
+          }
+          if (scrapedUrls.has(request.url)) {
+              log.warning(`Skipping duplicate detail URL: ${request.url}`);
+              return;
+          }
           
           const item = extractFromDetail({ request, $ });
+          
+          // Validate essential field
           if (!cleanText(item.title)) {
               log.warning(`Skipping detail page with no title: ${request.url}`);
               return; 
@@ -513,19 +621,32 @@ await Actor.main(async () => {
           await Dataset.pushData(item);
           jobsScraped++;
           scrapedUrls.add(request.url);
-          log.info(`Saved: ${item.title}`);
+          log.info(`Saved: ${item.title} (Total: ${jobsScraped}/${RESULTS_WANTED})`);
         }
       } catch (e) {
-        log.error(`Error in requestHandler for ${request.url}: ${e.message}`);
+        // Log errors gracefully without crashing
+        log.error(`Error in requestHandler for ${request.url}: ${e.message}`, { stack: e.stack });
       }
     },
 
+    // Log failed requests clearly
     failedRequestHandler: async ({ request, error }) => {
-      log.error(`Request failed ${request.url}: ${error?.message}`);
+      log.error(`Request failed: ${request.url} (Label: ${request.userData?.label}, Retries: ${request.retryCount}) | Error: ${error?.message}`);
     },
   });
 
   log.info('Starting crawler...');
+  log.info('--- Initial URLs ---');
+  initialUrls.forEach((u, i) => log.info(`${i+1}: ${u}`));
+  log.info('----------------------');
+  
+  // Await the crawler run to ensure all async work completes
   await crawler.run(initialUrls.map(u => ({ url: u, userData: { label: 'LIST', pageNo: 1 } })));
-  log.info(`Done. Jobs saved: ${jobsScraped}`);
+  
+  // Final summary log
+  if (jobsScraped === 0) {
+      log.warning('Crawl finished. No jobs were saved.');
+  } else {
+      log.info(`Crawl finished. Total jobs saved: ${jobsScraped}`);
+  }
 });
