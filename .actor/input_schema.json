@@ -20,21 +20,8 @@
       "title": "Start URLs (replaces all other inputs)",
       "type": "array",
       "description": "An array of start URLs. Overrides all other inputs (Keyword, Location, Start URL).",
-      "editor": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "title": "URL",
-            "type": "string",
-            "description": "A single URL to scrape.",
-            "editor": "textfield"
-          }
-        },
-        "required": [
-          "url"
-        ]
-      }
+      "editor": "requestListSources",
+      "prefill": []
     },
     "keyword": {
       "title": "Keyword (if not using Start URLs)",
