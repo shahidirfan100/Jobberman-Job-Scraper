@@ -1,44 +1,31 @@
 {
   "title": "Jobberman Jobs Scraper",
-  "description": "Scrape jobs from Jobberman.com. Provide either Keyword/Location inputs OR one of the Start URL inputs (Start URL, URL, or Start URLs).",
+  "description": "Scrape jobs from Jobberman.com. Provide either a single Start URL OR use the Keyword/Location inputs.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "startUrl": {
-      "title": "Start URL",
+      "title": "Start URL (optional)",
       "type": "string",
       "description": "A single Jobberman.com search URL to start from. If provided, Keyword/Location inputs are ignored.",
       "editor": "textfield"
     },
-    "url": {
-      "title": "URL (alias for Start URL)",
-      "type": "string",
-      "description": "An alias for 'Start URL' for compatibility. If provided, Keyword/Location inputs are ignored.",
-      "editor": "textfield"
-    },
-    "startUrls": {
-      "title": "Start URLs (replaces all other inputs)",
-      "type": "array",
-      "description": "An array of start URLs. Overrides all other inputs (Keyword, Location, Start URL).",
-      "editor": "requestListSources",
-      "prefill": []
-    },
     "keyword": {
-      "title": "Keyword (if not using Start URLs)",
+      "title": "Keyword (if not using Start URL)",
       "type": "string",
       "description": "Job search keyword(s), e.g., 'Software Developer', 'Marketing Manager', 'Data Analyst', 'Nurse', 'Sales Representative'.",
       "editor": "textfield",
       "prefill": "software engineer"
     },
     "location": {
-      "title": "Location (if not using Start URLs)",
+      "title": "Location (if not using Start URL)",
       "type": "string",
       "description": "Geographic location to search in, e.g., 'Lagos', 'Abuja', 'Port Harcourt', 'Ibadan', 'Kano'.",
       "editor": "textfield",
       "prefill": "Lagos"
     },
     "posted_date": {
-      "title": "Posted Date (if not using Start URLs)",
+      "title": "Posted Date (if not using Start URL)",
       "type": "string",
       "description": "Filter jobs by how recently they were posted.",
       "enum": [

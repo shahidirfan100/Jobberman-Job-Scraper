@@ -442,9 +442,7 @@ await Actor.main(async () => {
     results_wanted: RESULTS_WANTED_RAW, // Use prefilled default
     max_pages: MAX_PAGES_RAW, // Use prefilled default
     collectDetails = true, // Safe default
-    startUrl,
-    url,
-    startUrls,
+    startUrl, // Use the single start URL
     cookies,
     cookiesJson,
     proxyConfiguration, // Honor the provided proxy config
@@ -456,13 +454,13 @@ await Actor.main(async () => {
 
   // Log the sanitized/final input parameters for QA
   log.info('Actor starting with parameters:', {
+      startUrl: startUrl || 'Not provided',
       keyword,
       locationFilter,
       posted_date,
       RESULTS_WANTED,
       MAX_PAGES,
       collectDetails,
-      hasStartUrls: (startUrls && startUrls.length > 0) || !!startUrl || !!url,
       hasProxy: !!proxyConfiguration,
   });
 
@@ -470,12 +468,10 @@ await Actor.main(async () => {
   // Build the search URL from inputs
   const builtStartUrl = buildStartUrl(keyword, locationFilter, posted_date);
   
-  // Respect user-provided start URLs first
-  if (Array.isArray(startUrls) && startUrls.length) {
-      initialUrls.push(...startUrls.map(o => (typeof o === 'string' ? o : o?.url)).filter(Boolean));
+  // Respect user-provided start URL first
+  if (startUrl && typeof startUrl === 'string') {
+      initialUrls.push(startUrl);
   }
-  if (startUrl && typeof startUrl === 'string') initialUrls.push(startUrl);
-  if (url && typeof url === 'string') initialUrls.push(url);
   
   // Fallback to the built search URL if no other URLs were provided
   if (initialUrls.length === 0) {
