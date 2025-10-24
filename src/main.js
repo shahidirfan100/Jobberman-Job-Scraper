@@ -6,6 +6,13 @@ import { Actor, log } from 'apify';
 import { CheerioCrawler, Dataset } from 'crawlee';
 import { load as cheerioLoad } from 'cheerio';
 
+// ------------------------- CONSTANTS -------------------------
+const DEFAULT_RESULTS_WANTED = 50;
+const DEFAULT_MAX_PAGES = 10;
+const MAX_RESULTS_CAP = 500;
+const MAX_PAGES_CAP = 100;
+const SOURCE_ID = 'jobberman.com';
+
 // ------------------------- UTILITIES -------------------------
 const cleanText = (s) => String(s ?? '')
   .replace(/[\u00A0\t\r\n]+/g, ' ')
@@ -427,59 +434,91 @@ const extractFromDetail = ({ request, $ }) => {
   ({ title, company, job_type, location, salary_range, category, description_html, description_text, date_posted } =
     enrichFromJsonLd(jsonLd, { title, company, job_type, location, salary_range, category, description_html, description_text, date_posted }, request.url));
 
-  return { url: request.url, title, company, job_type, location, salary_range, category, description_html, description_text, date_posted };
+  return { url: request.url, title, company, job_type, location, salary_range, category, description_html, description_text, date_posted, _source: SOURCE_ID };
 };
 
 // ------------------------- MAIN -------------------------
-// Wrap the entire run in the Actor.main() lifecycle hook
-await Actor.main(async () => {
-  // Safely read and validate input
-  const input = (await Actor.getInput()) ?? {};
-  const {
-    keyword, // Use prefilled default from input schema
-    location: locationFilter, // Use prefilled default
-    posted_date = 'anytime', // Safe default
-    results_wanted: RESULTS_WANTED_RAW, // Use prefilled default
-    max_pages: MAX_PAGES_RAW, // Use prefilled default
-    collectDetails = true, // Safe default
-    startUrl, // Use the single start URL
-    cookies,
-    cookiesJson,
-    proxyConfiguration, // Honor the provided proxy config
-  } = input;
+  // Wrap the entire run in the Actor.main() lifecycle hook
+  await Actor.main(async () => {
+    // Safely read and validate input
+    const input = (await Actor.getInput()) ?? {};
+    const {
+      keyword, // Use prefilled default from input schema
+      location: locationFilter, // Use prefilled default
+      posted_date = 'anytime', // Safe default
+      results_wanted: RESULTS_WANTED_RAW,
+      max_pages: MAX_PAGES_RAW,
+      collectDetails = true,
+      startUrl,
+      cookies,
+      cookiesJson,
+      proxyConfiguration,
+    } = input;
 
-  // Safely parse numeric inputs with fallbacks
-  const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 100; // Use input default
-  const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 999; // Use input default
+    const sanitizeInt = (raw, fallback, cap) => {
+      if (Number.isFinite(+raw)) return Math.max(1, Math.min(cap, Math.floor(+raw)));
+      return fallback;
+    };
 
-  // Log the sanitized/final input parameters for QA
-  log.info('Actor starting with parameters:', {
-      startUrl: startUrl || 'Not provided',
-      keyword,
-      locationFilter,
-      posted_date,
-      RESULTS_WANTED,
-      MAX_PAGES,
-      collectDetails,
-      hasProxy: !!proxyConfiguration,
-  });
+    const RESULTS_WANTED = sanitizeInt(RESULTS_WANTED_RAW, DEFAULT_RESULTS_WANTED, MAX_RESULTS_CAP);
+    const MAX_PAGES = sanitizeInt(MAX_PAGES_RAW, DEFAULT_MAX_PAGES, MAX_PAGES_CAP);
 
-  const initialUrls = [];
-  // Build the search URL from inputs
-  const builtStartUrl = buildStartUrl(keyword, locationFilter, posted_date);
-  
-  // Respect user-provided start URL first
-  if (startUrl && typeof startUrl === 'string') {
-      initialUrls.push(startUrl);
-  }
-  
-  // Fallback to the built search URL if no other URLs were provided
-  if (initialUrls.length === 0) {
-      initialUrls.push(builtStartUrl);
-  }
+    const trimmedStartUrl = typeof startUrl === 'string' ? startUrl.trim() : '';
+    let validatedStartUrl = '';
+    if (trimmedStartUrl) {
+      try {
+        const parsed = new URL(trimmedStartUrl);
+        const hostname = parsed.hostname.toLowerCase();
+        const allowedDomains = ['jobberman.com', 'jobberman.com.gh'];
+        const isAllowed = allowedDomains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+        if (!isAllowed) {
+          await Actor.fail(`Provided startUrl must point to Jobberman, received host "${hostname}".`);
+        }
+        validatedStartUrl = parsed.href;
+      } catch (err) {
+        await Actor.fail(`Provided startUrl is not a valid URL: ${err.message}`);
+      }
+    }
 
-  // Honor proxy configuration exactly as provided
-  const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : undefined;
+    let proxyConf;
+    try {
+      const proxyInput = proxyConfiguration && typeof proxyConfiguration === 'object' ? proxyConfiguration : null;
+      const shouldUseDefaultProxy = !proxyInput || Object.keys(proxyInput).length === 0;
+      const proxyOptions = shouldUseDefaultProxy
+        ? { useApifyProxy: true, apifyProxyGroups: ['AUTO'] }
+        : proxyInput;
+      proxyConf = await Actor.createProxyConfiguration(proxyOptions);
+    } catch (err) {
+      log.error(`Failed to initialize proxy configuration: ${err.message}`);
+      await Actor.fail(`Proxy configuration error: ${err.message}`);
+    }
+
+    // Log the sanitized/final input parameters for QA
+    log.info('Actor starting with parameters:', {
+        startUrl: validatedStartUrl || 'Not provided',
+        keyword,
+        locationFilter,
+        posted_date,
+        RESULTS_WANTED,
+        MAX_PAGES,
+        collectDetails,
+        hasProxy: !!proxyConf?.usesApifyProxy,
+    });
+    await Actor.setStatusMessage(`Searching Jobberman (target: ${RESULTS_WANTED} jobs, ${collectDetails ? 'detail' : 'listing'} mode)`);
+
+    const initialUrls = [];
+    // Build the search URL from inputs
+    const builtStartUrl = buildStartUrl(keyword, locationFilter, posted_date);
+
+    // Respect user-provided start URL first
+    if (validatedStartUrl) {
+        initialUrls.push(validatedStartUrl);
+    }
+
+    // Fallback to the built search URL if no other URLs were provided
+    if (initialUrls.length === 0) {
+        initialUrls.push(builtStartUrl);
+    }
 
   let jobsScraped = 0;
   let jobsEnqueued = 0;
@@ -550,16 +589,23 @@ await Actor.main(async () => {
             if (seed.title) seedsByUrl.set(u, seed);
           });
 
-          if (!collectDetails) {
-            // Stop enqueueing when limit is hit
-            const toPush = links.slice(0, RESULTS_WANTED - jobsScraped);
-            if (toPush.length > 0) {
-              const items = toPush.map(u => ({ url: u, ...(seedsByUrl.get(u) || {}), _source: 'jobberman.com' }));
-              await Dataset.pushData(items);
-              jobsScraped += items.length;
-              log.info(`Pushed ${items.length} items directly from list page. Total: ${jobsScraped}`);
-            }
-          } else {
+            if (!collectDetails) {
+              // Stop enqueueing when limit is hit
+              const toPush = links.slice(0, RESULTS_WANTED - jobsScraped);
+              if (toPush.length > 0) {
+                const items = toPush.map((u) => ({
+                  url: u,
+                  description_html: '',
+                  description_text: '',
+                  date_posted: '',
+                  _source: SOURCE_ID,
+                  ...(seedsByUrl.get(u) || {}),
+                }));
+                await Dataset.pushData(items);
+                jobsScraped += items.length;
+                log.info(`Pushed ${items.length} items directly from list page. Total: ${jobsScraped}`);
+              }
+            } else {
             // Stop enqueueing when limit is hit
             const toEnqueue = links.slice(0, RESULTS_WANTED - jobsEnqueued);
             for (const u of toEnqueue) {
@@ -640,9 +686,11 @@ await Actor.main(async () => {
   await crawler.run(initialUrls.map(u => ({ url: u, userData: { label: 'LIST', pageNo: 1 } })));
   
   // Final summary log
-  if (jobsScraped === 0) {
-      log.warning('Crawl finished. No jobs were saved.');
-  } else {
-      log.info(`Crawl finished. Total jobs saved: ${jobsScraped}`);
-  }
-});
+    if (jobsScraped === 0) {
+        log.warning('Crawl finished. No jobs were saved.');
+        await Actor.setStatusMessage('Finished without results - please review input or site changes.');
+    } else {
+        log.info(`Crawl finished. Total jobs saved: ${jobsScraped}`);
+        await Actor.setStatusMessage(`Finished - saved ${jobsScraped} jobs.`);
+    }
+  });
